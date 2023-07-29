@@ -2,13 +2,14 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.operators.empty import EmptyOperator
 from datetime import datetime, timedelta
+import csv
 
 default_args = {
     'owner':'teja003',
     'retries':5,
     'retry_delay':timedelta(minutes=1)
 }
-
+#  sensory, branch
 def extractfn(ti):
     import requests
     from bs4 import BeautifulSoup
@@ -24,74 +25,44 @@ def extractfn(ti):
 
 def transformfn(ti):
     from bs4 import BeautifulSoup
-    import xml.etree.ElementTree as ET
     filename = ti.xcom_pull(task_ids="extract",key="raw_file")
     with open(filename,'r') as f:
         document = f.read()
     soup = BeautifulSoup(document,"xml")
     news_items = soup.find_all("item")
-    xml_data = ET.Element("list")
-    for i in news_items:
-        data = ET.SubElement(xml_data,'item')
-        title_ele = ET.SubElement(data, 'title')
-        title_ele.text = i.find("title").text
-        desc_ele = ET.SubElement(data, 'description')
-        desc_ele.text = i.find("description").text
-        link_ele = ET.SubElement(data, 'link')
-        link_ele.text = i.find("link").text
-        guid_ele = ET.SubElement(data, 'guid')
-        guid_ele.text = i.find("guid").text
-        pubDate_ele = ET.SubElement(data, 'pubDate')
-        pubDate_ele.text = i.find("pubDate").text
-    write_data = ET.tostring(xml_data)
+    items = []
+    for item in news_items:
+        title = item.find('title').text
+        link = item.find('link').text
+        pub_date = item.find('pubDate').text
+        items.append((title, link, pub_date))
     today = datetime.now()
     d1 = today.strftime("%Y%m%d%H%M%S")
-    file = f"curated_{d1}.xml"
+    file = f"curated_{d1}.csv"
     ti.xcom_push(key="curated_file",value=file)
-    with open(file, "wb") as f:
-        f.write(write_data)
+    with open(file, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['Title', 'Link', 'Pub Date'])
+        writer.writerows(items)
 
 def loadfn(ti):
-    from bs4 import BeautifulSoup
+    import pandas as pd
     import sqlite3
-    filename = ti.xcom_pull(task_ids="transform",key="curated_file")
-    with open(filename,'r') as f:
-        document = f.read()
-    soup = BeautifulSoup(document,"xml")
-    titles = soup.find_all("title")
-    descs = soup.find_all('description')
-    pubDates = soup.find_all('pubDate')
     conn = sqlite3.connect('rss_feed.db')
     cursor = conn.cursor()
-    cursor.execute("""CREATE TABLE IF NOT EXISTS FEED(
-    Title VARCHAR(255) NOT NULL,
-    Description VARCHAR(255) NOT NULL,
-    PubDate VARCHAR(50)
-    )""")
-    for i in zip(titles,descs,pubDates):
-        title = i[0].text.split('"')
-        title = "'".join(title)
-
-        desc = i[1].text.split('"')
-        desc = "'".join(desc)
-
-        pubDate = i[2].text.split('"')
-        pubDate = "'".join(pubDate)
-
-        table = f"INSERT INTO FEED VALUES(\"{title}\",\"{desc}\",\"{pubDate}\")"
-        print(table)
-        cursor.execute(table)
+    filename = ti.xcom_pull(task_ids="transform",key="curated_file")
+    data = pd.read_csv(filename)
+    data.to_sql('FEED', conn, if_exists='append', index=False)
     conn.commit()
     conn.close()
     print("Done")
 
-
 with DAG(
-    dag_id = "rss_feed_etl",
+    dag_id = "rss_etl",
     default_args=default_args,
     description = "rss feed etl",
-    start_date = datetime(2023,7,19),
-    schedule_interval='* 23 * * *',
+    start_date = datetime(2023,7,23),
+    schedule_interval='0 23 * * *',
 ) as dag:
     extract = PythonOperator(
         task_id="extract",

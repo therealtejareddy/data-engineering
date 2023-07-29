@@ -87,11 +87,11 @@ def loadfn(ti):
 
 
 with DAG(
-    dag_id = "rss_feed_etl",
+    dag_id = "rss_feed_etl_xml",
     default_args=default_args,
     description = "rss feed etl",
     start_date = datetime(2023,7,19),
-    schedule_interval='* 23 * * *',
+    schedule_interval='0 23 * * *',
 ) as dag:
     extract = PythonOperator(
         task_id="extract",
